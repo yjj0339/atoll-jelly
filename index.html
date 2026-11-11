@@ -650,7 +650,7 @@ function ringsUpdate(dt){
   }
 }
 /* SECTION: seaplane */
-const PARK=[-0.65,0.9], MOOR_YAW=Math.PI, LANE_Z=2.1;
+const PARK=[-0.72,1.28], MOOR_YAW=Math.PI, LANE_Z=2.1;
 const ROUTE={L:1.7,Rc:2.05,alt:3.1,speed:1.65};
 ROUTE.perim=4*ROUTE.L+TAU*ROUTE.Rc;
 const S_JOIN=2*ROUTE.L+Math.PI*ROUTE.Rc;
@@ -1070,8 +1070,8 @@ const C={
   holeFloor:[0.35,0.45,0.50],
   choc:[0.38,0.22,0.13],caramel:[0.90,0.56,0.21],shell:[0.97,0.91,0.83],
   wood:[0.62,0.45,0.30],woodLight:[0.80,0.66,0.48],woodDark:[0.42,0.30,0.20],
-  thatch:[0.78,0.64,0.38],thatchDark:[0.62,0.49,0.28],
-  trunk:[0.55,0.42,0.28],frond:[0.24,0.55,0.28],frondDark:[0.18,0.44,0.22],dead:[0.55,0.42,0.24],
+  thatch:[0.84,0.70,0.44],thatchDark:[0.70,0.56,0.33],
+  trunk:[0.55,0.42,0.28],frond:[0.26,0.60,0.29],frondDark:[0.15,0.42,0.20],dead:[0.58,0.45,0.26],
   gummy:[0.45,0.75,0.35],gummyLime:[0.62,0.82,0.30],
   white:[0.95,0.94,0.91],teal:[0.07,0.64,0.65],glass:[0.15,0.30,0.34],
   copper:[0.72,0.45,0.28],lamp:[1.0,0.85,0.55],
@@ -1171,6 +1171,34 @@ function buildShadow(){
   mb.quad([-r,y,-r],[-r,y,r],[r,y,r],[r,y,-r],[1,1,1],{anim:10});
   return mb;
 }
+function buildContact(){
+  // Soft contact shadows. The normalized radius is carried in the vertex colour
+  // (r channel) so the shader can fade each disc from its OWN centre — a shared
+  // world-origin falloff would turn these into hard-edged blobs.
+  const mb=new MB();
+  const disc=(x,z,y,rx,rz,strength)=>{
+    mb.param((u,v)=>{
+      const a=v*TAU;
+      return[x+Math.cos(a)*u*rx,y,z+Math.sin(a)*u*rz];
+    },5,14,null,{anim:15,colFn:(u)=>[u,strength,0]});
+  };
+  // island blob shadow (wide, very soft)
+  disc(ISLAND.x,ISLAND.z,floorH(ISLAND.x,ISLAND.z)+0.014,1.02,0.96,0.16);
+  // pavilion footprint
+  disc(ISLAND.x+0.05,ISLAND.z+0.05,floorH(ISLAND.x+0.05,ISLAND.z+0.05)+0.020,0.46,0.39,0.20);
+  // palm trunk bases (tight, darker)
+  const spots=[[-0.28,-0.2],[0.22,-0.32],[0.42,0.1],[-0.4,0.22],[-0.05,0.42],[0.3,0.4],[-0.45,-0.35],[0.05,-0.5]];
+  for(const[sx,sz]of spots){
+    const x=ISLAND.x+sx,z=ISLAND.z+sz;
+    disc(x,z,floorH(x,z)+0.024,0.15,0.15,0.26);
+  }
+  // beach umbrellas
+  for(const[ux,uz]of[[0.72,0.55],[-0.1,0.85]]){
+    const x=ISLAND.x+ux,z=ISLAND.z+uz;
+    disc(x,z,floorH(x,z)+0.022,0.24,0.24,0.18);
+  }
+  return mb;
+}
 /* SECTION: roof & furniture helpers */
 function hipRoof(mb,cx,cy,cz,wx,wz,h,o={}){
   // Watertight banded pyramid thatch roof: four triangular faces share ONE apex
@@ -1190,37 +1218,52 @@ function hipRoof(mb,cx,cy,cz,wx,wz,h,o={}){
     for(let b=0;b<bands;b++){
       const t0=b/bands,t1=(b+1)/bands;
       const e0=L3(p,apex,t0),e1=L3(q,apex,t0),f1=L3(q,apex,t1),f0=L3(p,apex,t1);
-      const col=(b===bands-1||b%2===0)?C.thatch:C.thatchDark;
+      const col=(b%2===0)?C.thatch:C.thatchDark;
       const ux=e1[0]-e0[0],uy=e1[1]-e0[1],uz=e1[2]-e0[2];
       const vx=f0[0]-e0[0],vy=f0[1]-e0[1],vz=f0[2]-e0[2];
       const nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;
       const flip=(nx*out[0]+ny*out[1]+nz*out[2])<0;
+      // true slope normal (shared by the whole face) so bands shade as one plane
+      const nl=Math.hypot(nx,ny,nz)||1;
+      const sgn=flip?-1:1;
+      const nrm=[sgn*nx/nl,sgn*ny/nl,sgn*nz/nl];
       if(t1>=1){ // top band collapses to the shared apex -> single triangle
-        if(flip)mb.tri(mb.vert(e0,[0,1,0],col,oo),mb.vert(apex,[0,1,0],col,oo),mb.vert(e1,[0,1,0],col,oo));
-        else mb.tri(mb.vert(e0,[0,1,0],col,oo),mb.vert(e1,[0,1,0],col,oo),mb.vert(apex,[0,1,0],col,oo));
+        const a0=mb.vert(e0,nrm,col,oo),a1=mb.vert(e1,nrm,col,oo),aa=mb.vert(apex,nrm,col,oo);
+        if(flip)mb.tri(a0,aa,a1);else mb.tri(a0,a1,aa);
       }else{
-        if(flip)mb.quad(e0,f0,f1,e1,col,oo);else mb.quad(e0,e1,f1,f0,col,oo);
+        const a0=mb.vert(e0,nrm,col,oo),a1=mb.vert(e1,nrm,col,oo),
+              b1=mb.vert(f1,nrm,col,oo),b0=mb.vert(f0,nrm,col,oo);
+        if(flip){mb.tri(a0,b0,b1);mb.tri(a0,b1,a1);}
+        else{mb.tri(a0,a1,b1);mb.tri(a0,b1,b0);}
       }
     }
-    // solid bright cap over the top 45%: seals the tip so the hollow interior
-    // can never show through as a dark notch at the apex
-    const c0=L3(p,apex,0.55),c1=L3(q,apex,0.55);
-    const cu=[c1[0]-c0[0],c1[1]-c0[1],c1[2]-c0[2]];
-    const cv=[apex[0]-c0[0],apex[1]-c0[1],apex[2]-c0[2]];
-    const cn=[cu[1]*cv[2]-cu[2]*cv[1],cu[2]*cv[0]-cu[0]*cv[2],cu[0]*cv[1]-cu[1]*cv[0]];
-    const cf=(cn[0]*out[0]+cn[1]*out[1]+cn[2]*out[2])<0;
-    const v0=mb.vert(c0,[0,1,0],C.thatch,oo),v1=mb.vert(c1,[0,1,0],C.thatch,oo),va=mb.vert(apex,[0,1,0],C.thatch,oo);
-    if(cf)mb.tri(v0,va,v1);else mb.tri(v0,v1,va);
   }
 }
 function lounger(mb,x,y,z,yaw,col){
+  // compact sun lounger: teak frame + segmented cushion + raised backrest.
+  // Kept short (0.30) so it sits fully inside a villa deck instead of jutting out.
   mb.withM(m4Mul(m4T(x,y,z),m4Ry(yaw)),()=>{
-    mb.box(0,0.05,0,0.16,0.02,0.42,col,{gloss:0.2});
-    mb.withM(m4Mul(m4T(0,0.06,-0.16),m4Rx(-0.6)),()=>{mb.box(0,0.07,0,0.16,0.02,0.2,col,{gloss:0.2});});
-    mb.box(-0.06,0.02,0.12,0.02,0.05,0.02,C.woodDark,{});
-    mb.box(0.06,0.02,0.12,0.02,0.05,0.02,C.woodDark,{});
-    mb.box(-0.06,0.02,-0.12,0.02,0.05,0.02,C.woodDark,{});
-    mb.box(0.06,0.02,-0.12,0.02,0.05,0.02,C.woodDark,{});
+    const W=0.115,L=0.30;
+    // frame rails + legs
+    for(const sx of[-1,1]){
+      mb.box(sx*W/2,0.030,0,0.012,0.014,L,C.wood,{gloss:0.25});
+      mb.box(sx*W/2,0.014,L/2-0.022,0.012,0.030,0.012,C.woodDark,{gloss:0.2});
+      mb.box(sx*W/2,0.014,-L/2+0.022,0.012,0.030,0.012,C.woodDark,{gloss:0.2});
+    }
+    mb.box(0,0.030,L/2-0.010,W,0.012,0.012,C.wood,{gloss:0.25});
+    mb.box(0,0.030,-L/2+0.010,W,0.012,0.012,C.wood,{gloss:0.25});
+    // seat cushion: three soft segments
+    for(let i=0;i<3;i++){
+      const cz=0.055-i*0.062;
+      mb.roundedBox(0,0.044,cz,W-0.012,0.020,0.056,0.008,col,{gloss:0.30,seg:2});
+    }
+    // backrest, hinged at the head end and reclined
+    mb.withM(m4Mul(m4T(0,0.046,-L/2+0.028),m4Rx(0.62)),()=>{
+      mb.roundedBox(0,0.010,-0.048,W-0.012,0.018,0.105,0.008,col,{gloss:0.30,seg:2});
+      mb.box(0,0.002,-0.048,W,0.008,0.108,C.wood,{gloss:0.25});
+    });
+    // folded towel accent
+    mb.roundedBox(0,0.056,0.088,W-0.030,0.008,0.030,0.004,[0.96,0.96,0.94],{gloss:0.2,seg:2});
   });
 }
 function umbrella(mb,x,y,z){
@@ -1267,23 +1310,23 @@ function palm(mb,x,z,baseY,scale,lean){
     for(let k=0;k<=NP;k++){rib.push(at(k/NP));rr.push(0.0075*scale*(1-k/NP*0.78));}
     const green=i%3===0?C.frondDark:C.frond;
     mb.tube(rib,rr,5,green,{sway:1,anim:1,gloss:0.3});
-    // leaflets: 11 pairs, tapered, swept back and drooping — parametric ribbons
-    for(let k=1;k<=9;k++){
-      const t=k/10.2;
-      const p=at(t),pn=at(Math.min(1,t+0.10));
-      const ll=0.135*scale*Math.sin(Math.PI*Math.pow(t,0.70))**0.5*(1-t*0.20);
-      if(ll<0.010)continue;
+    // leaflets: wide overlapping leaf-shaped blades -> full feathery crown
+    for(let k=1;k<=10;k++){
+      const t=k/11;
+      const p=at(t),pn=at(Math.min(1,t+0.075));
+      const ll=0.16*scale*Math.sin(Math.PI*Math.pow(t,0.62))**0.45*(1-t*0.15);
+      if(ll<0.012)continue;
       for(const sgn of[1,-1]){
-        const shade=sgn>0?green:C.frondDark;
+        const shade=(k%2===0)?green:C.frondDark;
         mb.param((u,v)=>{
-          const sweep=0.045*scale*t;
+          const sweep=0.05*scale*t;
           const bx=lerp(p[0],pn[0],v),by=lerp(p[1],pn[1],v),bz=lerp(p[2],pn[2],v);
-          const w=ll*u;
-          const fold=Math.sin(Math.PI*u)*0.016*scale;
-          return[bx+px*sgn*w+dx*sweep*u,
-                 by-fold-u*u*0.050*scale*t,
-                 bz+pz*sgn*w+dz*sweep*u];
-        },4,2,shade,{sway:1.5,anim:1,gloss:0.30});
+          const w=ll*Math.sin(Math.PI*Math.pow(v,0.8));   // leaf width: pointed base & tip
+          const fold=Math.sin(Math.PI*v)*0.014*scale;
+          return[bx+px*sgn*w+dx*sweep*v,
+                 by-fold-v*v*0.045*scale*t,
+                 bz+pz*sgn*w+dz*sweep*v];
+        },2,4,shade,{sway:1.2,anim:1,gloss:0.30});
       }
     }
   }
@@ -1321,11 +1364,19 @@ function buildIsland(){
     palm(mb,x,z,floorH(x,z)-0.02,R(0.85,1.15),R(0,TAU));
   }
   const px=ix+0.05,pz=iz+0.05,py=floorH(px,pz);
-  mb.box(px,py+0.02,pz,0.62,0.05,0.5,C.woodLight,{gloss:0.15});
-  for(const[ox,oz]of[[-0.26,-0.2],[0.26,-0.2],[-0.26,0.2],[0.26,0.2]]){
-    mb.cylinder(px+ox,py-0.1,pz+oz,0.022,0.02,0.42,6,C.woodDark,{});
+  // open-sided pavilion: plank deck on stilts, four posts, tall thatch hip roof
+  mb.box(px,py+0.02,pz,0.62,0.045,0.5,C.woodDark,{gloss:0.12});
+  for(let i=0;i<9;i++){
+    mb.box(px,py+0.042,pz-0.22+i*0.055,0.60,0.014,0.046,i%2?C.woodLight:C.wood,{gloss:0.2});
   }
-  mb.withM(m4T(px,py+0.33,pz),()=>{hipRoof(mb,0,0,0,0.42,0.34,0.24,{bands:6});});
+  for(const[ox,oz]of[[-0.26,-0.2],[0.26,-0.2],[-0.26,0.2],[0.26,0.2]]){
+    mb.cylinder(px+ox,py-0.12,pz+oz,0.024,0.021,0.16,8,C.woodDark,{gloss:0.1});
+    mb.cylinder(px+ox,py+0.05,pz+oz,0.019,0.017,0.36,8,C.wood,{gloss:0.2});
+  }
+  // low bench rail on two sides
+  mb.tube([[px-0.26,py+0.16,pz-0.2],[px+0.26,py+0.16,pz-0.2]],[0.010,0.010],6,C.wood,{gloss:0.2});
+  mb.tube([[px-0.26,py+0.16,pz+0.2],[px-0.26,py+0.16,pz-0.2]],[0.010,0.010],6,C.wood,{gloss:0.2});
+  mb.withM(m4T(px,py+0.41,pz),()=>{hipRoof(mb,0,0,0,0.36,0.29,0.42,{bands:9});});
   umbrella(mb,ix+0.72,floorH(ix+0.72,iz+0.55),iz+0.55);
   lounger(mb,ix+0.62,floorH(ix+0.62,iz+0.62)+0.01,iz+0.68,0.7,C.white);
   umbrella(mb,ix-0.1,floorH(ix-0.1,iz+0.85),iz+0.85);
@@ -1379,13 +1430,13 @@ function villa(mb,x,z,yaw,big){
     mb.box(hx+hw2+0.004,0.014+hh*0.55,hz,0.008,hh*0.42,hd2*1.0,C.glass,{gloss:0.97,trans:0.5});
     // thatch hip roof with eave fascia + ridge cap
     mb.withM(m4T(hx,0.014+hh+0.008,hz),()=>{
-      const rw=hw2+0.075,rd=hd2+0.075;
-      hipRoof(mb,0,0,0,rw,rd,big?0.175:0.125,{bands:big?7:5});
-      // eave fascia: four thin perimeter strips (no solid top that could show through)
-      mb.box(0,-0.006,-rd,rw*2,0.016,0.02,C.thatchDark,{gloss:0.08});
-      mb.box(0,-0.006,rd,rw*2,0.016,0.02,C.thatchDark,{gloss:0.08});
-      mb.box(-rw,-0.006,0,0.02,0.016,rd*2,C.thatchDark,{gloss:0.08});
-      mb.box(rw,-0.006,0,0.02,0.016,rd*2,C.thatchDark,{gloss:0.08});
+      const rw=hw2+0.065,rd=hd2+0.065;
+      hipRoof(mb,0,0,0,rw,rd,big?0.26:0.20,{bands:big?8:6});
+      // eave fascia: four slim perimeter strips (no solid top to show through)
+      mb.box(0,-0.005,-rd,rw*2,0.011,0.014,C.thatchDark,{gloss:0.08});
+      mb.box(0,-0.005,rd,rw*2,0.011,0.014,C.thatchDark,{gloss:0.08});
+      mb.box(-rw,-0.005,0,0.014,0.011,rd*2,C.thatchDark,{gloss:0.08});
+      mb.box(rw,-0.005,0,0.014,0.011,rd*2,C.thatchDark,{gloss:0.08});
     });
     // deck railing on the sea side
     const rz=hd-0.022;
@@ -1453,14 +1504,19 @@ function buildStructures(){
   }
   villa(mb,BIGPLAT.x,BIGPLAT.z,BW_YAW,true);
   const dk=DOCK;
-  mb.box(dk.x,dk.y,dk.z,dk.hw*2,0.04,dk.hd*2,C.woodLight,{gloss:0.18});
+  // floating seaplane dock: plank deck on white pontoons, thatch shade shelter
+  mb.box(dk.x,dk.y-0.012,dk.z,dk.hw*2,0.026,dk.hd*2,C.woodDark,{gloss:0.14});
+  for(let i=0;i<11;i++){
+    mb.box(dk.x,dk.y+0.006,dk.z-dk.hd+0.04+i*(dk.hd*2-0.08)/10,dk.hw*2-0.01,0.014,(dk.hd*2-0.08)/10-0.008,i%2?C.woodLight:C.wood,{gloss:0.2});
+  }
   for(const[ox,oz]of[[-dk.hw+0.04,-dk.hd+0.04],[dk.hw-0.04,-dk.hd+0.04],[-dk.hw+0.04,dk.hd-0.04],[dk.hw-0.04,dk.hd-0.04]]){
-    mb.cylinder(dk.x+ox,dk.y-0.16,dk.z+oz,0.03,0.028,0.16,6,C.white,{gloss:0.4});
+    mb.cylinder(dk.x+ox,dk.y-0.17,dk.z+oz,0.032,0.030,0.17,10,C.white,{gloss:0.45});
+    mb.cylinder(dk.x+ox,dk.y-0.05,dk.z+oz,0.034,0.034,0.02,10,C.teal,{gloss:0.5});
   }
-  for(const[ox,oz]of[[-0.24,-0.3],[0.24,-0.3],[-0.24,0.3],[0.24,0.3]]){
-    mb.cylinder(dk.x+ox,dk.y,dk.z+oz,0.012,0.01,0.3,5,C.woodDark,{});
+  for(const[ox,oz]of[[-0.24,-0.32],[0.24,-0.32],[-0.24,0.32],[0.24,0.32]]){
+    mb.cylinder(dk.x+ox,dk.y+0.01,dk.z+oz,0.014,0.012,0.30,8,C.wood,{gloss:0.2});
   }
-  mb.withM(m4T(dk.x,dk.y+0.3,dk.z),()=>{hipRoof(mb,0,0,0,0.32,0.42,0.12,{bands:4});});
+  mb.withM(m4T(dk.x,dk.y+0.31,dk.z),()=>{hipRoof(mb,0,0,0,0.31,0.40,0.30,{bands:7});});
   const ws=[-1.42,-0.62],we=[dk.x-0.1,dk.z-dk.hd];
   const wl=Math.hypot(we[0]-ws[0],we[1]-ws[1]);
   const wyaw=Math.atan2(we[1]-ws[1],we[0]-ws[0]);
@@ -1536,7 +1592,7 @@ function buildFishMesh(sp){
   mb.param((u,v)=>{
     const a=v*TAU,r=bodyR(u);
     return[bodyX(u),Math.sin(a)*r*tall,Math.cos(a)*r*0.52];
-  },16,14,null,{gloss:0.62,anim:3,colFn:(u)=>bandCol(u)});
+  },16,14,null,{gloss:0.62,anim:14,colFn:(u)=>bandCol(u)});
   // caudal fin: forked, two lobes
   for(const sgn of[1,-1]){
     mb.param((u,v)=>{
@@ -1545,7 +1601,7 @@ function buildFishMesh(sp){
       const y=spread*lerp(0.25,1.0,v)+sgn*0.004;
       const z=(v-0.5)*0.006*(1-u*0.5);
       return[x,y*(1-0.25*Math.sin(Math.PI*v)),z];
-    },6,5,s.tail,{gloss:0.45,anim:3});
+    },6,5,s.tail,{gloss:0.45,anim:14});
   }
   // dorsal fin (tall for tang)
   mb.param((u,v)=>{
@@ -1553,14 +1609,14 @@ function buildFishMesh(sp){
     const base=bodyR((x+0.072)/0.15)*tall;
     const h=(sp===0?0.055:0.030)*Math.sin(Math.PI*u)**0.7;
     return[x,base+h*v,(v-0.5)*0.004];
-  },10,3,s.fin,{gloss:0.45,anim:3});
+  },10,3,s.fin,{gloss:0.45,anim:14});
   // anal fin
   mb.param((u,v)=>{
     const x=lerp(-0.040,0.028,u);
     const base=-bodyR((x+0.072)/0.15)*tall;
     const h=(sp===0?0.042:0.022)*Math.sin(Math.PI*u)**0.7;
     return[x,base-h*v,(v-0.5)*0.004];
-  },8,3,s.fin,{gloss:0.45,anim:3});
+  },8,3,s.fin,{gloss:0.45,anim:14});
   // pectoral fins both sides
   for(const sgn of[1,-1]){
     mb.param((u,v)=>{
@@ -1568,12 +1624,12 @@ function buildFishMesh(sp){
       const z=sgn*(0.014+u*0.026);
       const y=-0.004-v*0.016*(1-u*0.4);
       return[x,y,z];
-    },5,3,s.fin,{gloss:0.4,anim:3});
+    },5,3,s.fin,{gloss:0.4,anim:14});
   }
   // eyes + mouth
   for(const sgn of[1,-1]){
-    mb.sphere(0.056,0.010,sgn*0.0145,0.0072,7,6,[0.08,0.08,0.09],{gloss:0.95,anim:3});
-    mb.sphere(0.0585,0.0115,sgn*0.0163,0.0026,5,4,[0.95,0.95,0.95],{gloss:1,anim:3});
+    mb.sphere(0.056,0.010,sgn*0.0145,0.0072,7,6,[0.08,0.08,0.09],{gloss:0.95,anim:14});
+    mb.sphere(0.0585,0.0115,sgn*0.0163,0.0026,5,4,[0.95,0.95,0.95],{gloss:1,anim:14});
   }
   mb.smooth(1.5e-3);
   return mb;
@@ -1598,17 +1654,17 @@ function buildRayMesh(){
     const n=Math.sin(u*31.7)*Math.cos(v*17.3)+Math.sin(u*13.1+v*23.7);
     return n>1.15?[0.90,0.90,0.87]:C.rayTop;
   };
-  mb.param((u,v)=>disc(u,v,1),20,10,null,{gloss:0.5,anim:4,colFn:spotCol});
-  mb.param((u,v)=>disc(u,v,-1),20,10,C.rayBelly,{gloss:0.35,anim:4,flip:true});
+  mb.param((u,v)=>disc(u,v,1),20,10,null,{gloss:0.5,anim:14,colFn:spotCol});
+  mb.param((u,v)=>disc(u,v,-1),20,10,C.rayBelly,{gloss:0.35,anim:14,flip:true});
   // sealed rim (single continuous edge strip, no coplanar overlap)
   mb.param((u,t)=>{
     const a=disc(u,0,1),b=disc(u,0,-1);
     return[lerp(a[0],b[0],t),lerp(a[1],b[1],t),a[2]];
-  },20,1,C.rayTop,{gloss:0.45,anim:4});
+  },20,1,C.rayTop,{gloss:0.45,anim:14});
   mb.param((u,t)=>{
     const a=disc(u,1,1),b=disc(u,1,-1);
     return[lerp(a[0],b[0],t),lerp(a[1],b[1],t),a[2]];
-  },20,1,C.rayBelly,{gloss:0.35,anim:4,flip:true});
+  },20,1,C.rayBelly,{gloss:0.35,anim:14,flip:true});
   // cephalic head fins (two rolled lobes)
   for(const s of[1,-1]){
     mb.param((u,v)=>{
@@ -1616,7 +1672,7 @@ function buildRayMesh(){
       const z=s*(0.048-u*0.016)+Math.sin(v*Math.PI)*0.008*s;
       const y=0.004-Math.sin(v*Math.PI)*0.016-u*0.006;
       return[x,y,z];
-    },6,5,C.rayTop,{gloss:0.45,anim:4});
+    },6,5,C.rayTop,{gloss:0.45,anim:14});
   }
   // whip tail with taper
   const tail=[],tr=[];
@@ -1625,11 +1681,11 @@ function buildRayMesh(){
     tail.push([-0.135-t*0.46,0.004-t*0.028+Math.sin(t*4)*0.006,Math.sin(t*3.4)*0.022]);
     tr.push(0.0085*(1-t*0.86));
   }
-  mb.tube(tail,tr,6,C.rayTop,{anim:4,gloss:0.4});
+  mb.tube(tail,tr,6,C.rayTop,{anim:14,gloss:0.4});
   // eyes + spiracles
   for(const s of[1,-1]){
-    mb.sphere(0.062,0.020,s*0.052,0.0105,7,6,[0.07,0.08,0.10],{anim:4,gloss:0.95});
-    mb.sphere(0.040,0.024,s*0.044,0.006,6,5,[0.16,0.18,0.20],{anim:4,gloss:0.6});
+    mb.sphere(0.062,0.020,s*0.052,0.0105,7,6,[0.07,0.08,0.10],{anim:14,gloss:0.95});
+    mb.sphere(0.040,0.024,s*0.044,0.006,6,5,[0.16,0.18,0.20],{anim:14,gloss:0.6});
   }
   mb.smooth(1.5e-3);
   return mb;
@@ -1877,27 +1933,31 @@ fn vs(in: VIn, @builtin(instance_index) ii: u32) -> VOut {
   let inst = insts[ii];
   var p = in.pos;
   let aid = in.prm.w;
-  if (aid == 2.0) {
-    let a = inst.anim.z;
-    let c = cos(a); let s = sin(a);
-    p = vec3f(p.x, p.y*c - p.z*s, p.y*s + p.z*c);
-  } else if (aid == 3.0) {
+  if (inst.anim.y == 1.0) {
+    // fish tail swish (local space), driven by instance channel so the vertex
+    // anim id stays free for the coherent jelly-body deformation
     let w = clamp(-p.x/0.14, 0.0, 1.0);
     let a = sin(inst.anim.x)*0.5*w;
     let c = cos(a); let s = sin(a);
     p = vec3f(p.x*c + p.z*s, p.y, -p.x*s + p.z*c);
-  } else if (aid == 4.0) {
+  } else if (inst.anim.y == 2.0) {
+    // ray wing flap + whip tail
     let w = abs(p.z);
     p.y = p.y + sin(inst.anim.x - w*9.0)*w*0.35;
     if (p.x < -0.2) {
       p.z = p.z + sin(inst.anim.x*0.7 + p.x*6.0)*(-p.x-0.2)*0.12;
     }
+  } else if (aid == 2.0) {
+    let a = inst.anim.z;
+    let c = cos(a); let s = sin(a);
+    p = vec3f(p.x, p.y*c - p.z*s, p.y*s + p.z*c);
   }
   var wp = (inst.model * vec4f(p, 1.0)).xyz;
-  if (aid == 11.0) {
-    // jelly wall: full body deformation, shares the water surface transform
+  if (aid == 11.0 || aid == 14.0 || inst.anim.y == 3.0) {
+    // jelly wall / reef creatures / island & structures: ride the body deformation
     wp = jellyDeform(wp);
-  } else if (in.prm.z > 0.0) {
+  }
+  if (in.prm.z > 0.0 && aid != 11.0) {
     let ph = u.time*0.7 + wp.x*1.7 + wp.z*1.3;
     let amp = in.prm.z * 0.0075 * (0.30 + max(0.0, wp.y - 1.0)*0.5);
     wp.x = wp.x + sin(ph)*amp;
@@ -1920,7 +1980,10 @@ fn fs(in: VOut) -> @location(0) vec4f {
   var N = normalize(in.nrm);
   if (dot(N,N) < 0.5) { N = vec3f(0.0,1.0,0.0); }   // degenerate normal guard
   let V0 = normalize(u.cam.xyz - in.wpos);
-  if (dot(N, V0) < 0.0) { N = -N; }                 // two-sided: never a black back face
+  // Two-sided ONLY for genuinely single-surface ribbons (palm leaflets, sea
+  // fans, fins). Flipping every back face would aim all normals at the camera
+  // and flatten the form shading of solid bodies such as the thatch roofs.
+  if (in.prm.z > 0.0 && dot(N, V0) < 0.0) { N = -N; }
   // normal variation + screen-space footprint: tiny objects get no sharp specular
   var rough = clamp(length(fwidth(N))*2.4, 0.0, 1.0);
   let fp = clamp(length(fwidth(in.wpos))*26.0, 0.0, 1.0);
@@ -1929,6 +1992,13 @@ fn fs(in: VOut) -> @location(0) vec4f {
     let d = length(in.wpos.xz)/3.55;
     let a = (1.0 - smoothstep(0.18, 1.0, d))*0.20;
     return vec4f(0.16, 0.13, 0.12, a);
+  }
+  if (aid == 15.0) {
+    // contact shadow: in.col.r carries the normalized radius, .g the strength
+    let d = clamp(in.col.r, 0.0, 1.0);
+    let fall = 1.0 - smoothstep(0.0, 1.0, d);
+    let a = fall*fall*in.col.g;
+    return vec4f(0.30, 0.26, 0.20, a);
   }
   if (aid == 11.0) {
     // jelly wall: flavour-tinted clear medium, NOT a white wash —
@@ -2036,9 +2106,9 @@ fn fs(in: VOut) -> @location(0) vec4f {
   let fres = pow(1.0 - max(dot(Ns, V), 0.0), 4.0);
   let refr = in.wpos.xz + Ns.xz*(0.40*dep);
   let grain = (vnoise(refr*38.0)-0.5)*0.05 + (vnoise(refr*11.0)-0.5)*0.04;
-  var bottom = vec3f(0.91, 0.86, 0.71) + grain;
+  var bottom = vec3f(0.95, 0.90, 0.76) + grain;
   let hole = smoothstep(0.42, 0.85, dep);
-  bottom = mix(bottom, vec3f(0.28, 0.41, 0.48), hole*0.88);
+  bottom = mix(bottom, vec3f(0.20, 0.38, 0.50), hole*0.90);
   let caus = caustic(refr*1.15, u.time*0.32)*clamp(1.1 - dep*0.9, 0.0, 1.0)*(1.0-aa*0.6);
   bottom = bottom + caus*vec3f(0.9, 1.0, 0.95)*0.34*u.extra.w;
   let path = clamp(dep/max(V.y, 0.22), 0.0, 3.2);
@@ -2061,9 +2131,9 @@ fn fs(in: VOut) -> @location(0) vec4f {
 `;
 /* SECTION: flavors */
 const FLAVORS={
-  teal:{absorb:[2.35,0.52,0.72],scatter:[0.10,0.62,0.62],kind:0,ui:'#12a2a6'},
-  sapphire:{absorb:[2.6,1.35,0.30],scatter:[0.10,0.28,0.72],kind:1,ui:'#2b50c8'},
-  lime:{absorb:[2.0,0.34,1.55],scatter:[0.45,0.70,0.16],kind:2,ui:'#7fb32a'}
+  teal:{absorb:[2.20,0.50,0.66],scatter:[0.06,0.72,0.70],kind:0,ui:'#12a2a6'},
+  sapphire:{absorb:[2.5,1.25,0.28],scatter:[0.08,0.30,0.82],kind:1,ui:'#2b50c8'},
+  lime:{absorb:[1.9,0.32,1.45],scatter:[0.48,0.78,0.14],kind:2,ui:'#7fb32a'}
 };
 let flavorKey='teal';
 /* SECTION: GPU state */
@@ -2180,6 +2250,7 @@ async function initGPU(){
 }
 function buildAllMeshes(){
   meshes.shadow=buildShadow().build(device);
+  meshes.contact=buildContact().build(device);
   meshes.terrain=buildTerrain().build(device);
   meshes.strata=buildStrata().build(device);
   meshes.island=buildIsland().build(device);
@@ -2242,11 +2313,12 @@ function uploadWater(){
 function fillInstances(){
   instCount=0;
   const iShadow=pushInst(IDENT,null,null);
+  const iContact=pushInst(IDENT,null,null);
   const iTerrain=pushInst(IDENT,null,null);
   const iStrata=pushInst(IDENT,null,null);
-  const iIsland=pushInst(IDENT,null,null);
-  const iStruct=pushInst(IDENT,null,null);
-  const iCorals=pushInst(IDENT,null,null);
+  const iIsland=pushInst(IDENT,null,[0,3,0,0]);
+  const iStruct=pushInst(IDENT,null,[0,3,0,0]);
+  const iCorals=pushInst(IDENT,null,[0,3,0,0]);
   const iWalls=pushInst(IDENT,null,[0,0,0,0]);
   const pm=compose([plane.x,plane.y,plane.z],plane.yaw,plane.pitch,plane.roll,1);
   const iPlane=pushInst(pm,null,[0,0,plane.prop,0]);
@@ -2261,12 +2333,12 @@ function fillInstances(){
     const yaw=Math.atan2(f.vz,f.vx);
     const pitch=Math.atan2(f.vy,Math.hypot(f.vx,f.vz)+0.01)*0.6;
     const m=compose([f.x,f.y,f.z],yaw,pitch,Math.sin(f.ph*0.5)*0.08,f.size);
-    fishIdx.push(pushInst(m,null,[f.ph,0,0,0]));
+    fishIdx.push(pushInst(m,null,[f.ph,1,0,0]));
   }
   const rayIdx=[];
   for(const r of rays){
     const m=compose([r.x,r.y,r.z],r.turn,0,0,r.size);
-    rayIdx.push(pushInst(m,null,[r.ph,0,0,0]));
+    rayIdx.push(pushInst(m,null,[r.ph,2,0,0]));
   }
   const ringIdx=[];
   for(const g of rings){
@@ -2289,7 +2361,7 @@ function fillInstances(){
     dropIdx.push(pushInst(m4Mul(m4T(d.x,d.y,d.z),m4S(0.014,0.02,0.014)),null,[0,0,0,0]));
   }
   const iWater=pushInst(IDENT,null,null);
-  return{iShadow,iTerrain,iStrata,iIsland,iStruct,iCorals,iWalls,iPlane,iProps,fishStart,fishIdx,rayIdx,ringIdx,pelIdx,bubIdx,dropIdx,iWater};
+  return{iShadow,iContact,iTerrain,iStrata,iIsland,iStruct,iCorals,iWalls,iPlane,iProps,fishStart,fishIdx,rayIdx,ringIdx,pelIdx,bubIdx,dropIdx,iWater};
 }
 function render(){
   if(!device||!ctx)return;
@@ -2332,6 +2404,7 @@ function render(){
   draw(meshes.shadow,ix.iShadow,1,pipeBlend);
   draw(meshes.terrain,ix.iTerrain,1,pipeOpaque);
   draw(meshes.strata,ix.iStrata,1,pipeOpaque);
+  draw(meshes.contact,ix.iContact,1,pipeBlend);
   draw(meshes.corals,ix.iCorals,1,pipeOpaque);
   draw(meshes.island,ix.iIsland,1,pipeOpaque);
   draw(meshes.structures,ix.iStruct,1,pipeOpaque);
